@@ -1,0 +1,105 @@
+{
+  // Версия контракта telemetry.
+  // Нужна для обратной совместимости.
+  // Тип: string.
+  // Обязательно.
+  "schema_version": "1.0",
+
+  "device": {
+    // Внутренний идентификатор устройства в CONTROL.
+    // Основной ключ для привязки telemetry к устройству.
+    // Тип: string.
+    // Обязательно.
+    "id": "3605e486-6572-4dd3-8b37-e71c11780976",
+
+    // Внешний идентификатор устройства, если он используется.
+    // Не является заменой device.id.
+    // Тип: string | null.
+    "external_id": null
+  },
+
+  // Время, к которому относится измерение.
+  // Это время на Edge.
+  // Тип: ISO 8601 datetime в UTC.
+  // Обязательно.
+  "captured_at": "2026-09-16T18:10:00Z",
+
+  "health": {
+    "cpu": {
+      // Загрузка CPU в момент измерения.
+      // Тип: number 0..100 | null.
+      "usage_percent": 71.2,
+
+      // Температура CPU.
+      // Тип: number, degrees Celsius | null.
+      "temperature_c": 59.8
+    },
+
+    "gpu": {
+      // Загрузка GPU.
+      // Тип: number 0..100 | null.
+      "usage_percent": 78.1,
+
+      // Температура GPU.
+      // Тип: number, degrees Celsius | null.
+      "temperature_c": 65.4,
+
+      // Использование видеопамяти.
+      // Тип: number 0..100 | null.
+      "memory_usage_percent": 61.2
+    },
+
+    "memory": {
+      // Использование оперативной памяти.
+      // Тип: number 0..100 | null.
+      "usage_percent": 70.1,
+
+      // Использованная RAM.
+      // Тип: integer >= 0, MB | null.
+      "used_mb": 5734,
+
+      // Общий объём RAM.
+      // Тип: integer > 0, MB | null.
+      "total_mb": 8192
+    },
+
+    "storage": {
+      // Использование основного хранилища.
+      // Тип: number 0..100 | null.
+      "usage_percent": 47.9
+    },
+
+    "network": {
+      // Уровень сигнала беспроводного интерфейса.
+      // Для Ethernet может быть null.
+      // Тип: number, dBm | null.
+      "rssi_dbm": -60,
+
+      // Текущая сетевой latency до контрольной точки.
+      // Тип: number >= 0, milliseconds | null.
+      "latency_ms": 17.8
+    }
+  },
+
+  "performance": {
+    // Текущий/усреднённый FPS входного видеопотока.
+    // Не обязательно равен заявленному FPS камеры.
+    // Тип: number >= 0 | null.
+    "fps_input": 30.0,
+
+    // Текущий FPS, который реально обрабатывает pipeline.
+    // Тип: number >= 0 | null.
+    "fps_processed": 28.7,
+
+    // Средняя latency inference за измерительный интервал.
+    // Тип: number >= 0, milliseconds | null.
+    "inference_latency_ms": 42.7
+  },
+
+  // Произвольные дополнительные технические метрики устройства.
+  // Используются только для метрик, которые ещё не вошли
+  // в стандартный контракт.
+  // Тип: object.
+  "payload": {}
+}
+
