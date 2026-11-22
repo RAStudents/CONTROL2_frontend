@@ -1,0 +1,47 @@
+/* Base */
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+}
+
+/* Theme */
+:root {
+    --color-primary: rgb(248, 80, 37);
+    --color-background: #f5f5f5;
+    --color-surface: #ffffff;
+}
+
+/* Buttons */
+.button {
+    border: none;
+    cursor: pointer;
+}
+
+/* Dashboard */
+.dashboard {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+}
+
+/* Event filters */
+.filters {
+    display: flex;
+    gap: 12px;
+}
+
+/* Event feed */
+.event-feed {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .dashboard {
+        grid-template-columns: 1fr;
+    }
+}
