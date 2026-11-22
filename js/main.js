@@ -107,3 +107,133 @@ function renderDashboard() {
   renderFeedRows();
   renderModal();
 }
+
+const state = {
+  loggedIn: false,
+  roleIndex: 0,
+  selectedEvent: events[0],
+  visibleCodes: new Set(['DEFECT', 'NO_HELMET', 'NORMAL']),
+  visibleSeverities: new Set(['Высокая', 'Средняя', 'Низкая']),
+  period: '30 дней',
+  device: 'Все',
+  binding: 'Все',
+  ascending: false,
+  modal: null
+};
+
+function renderFilters() {
+  const aside = element('aside', 'filters');
+  const addSelect = (id, labelText, options, value) => {
+    const label = element('label', '', labelText);
+    label.htmlFor = id;
+    const select = element('select');
+    select.id = id;
+    options.forEach(optionText => {
+      const option = element('option', '', optionText);
+      option.value = optionText;
+      select.append(option);
+    });
+    select.value = value;
+    select.addEventListener('change', () => {
+      if (id === 'filter-period') state.period = select.value;
+      if (id === 'filter-device') state.device = select.value;
+      if (id === 'filter-binding') state.binding = select.value;
+      renderFeedRows();
+    });
+    aside.append(label, select);
+  };
+
+  addSelect('filter-period', 'ПЕРИОД', ['Сегодня', '7 дней', '30 дней', 'Все время'], state.period);
+  addSelect('filter-device', 'УСТРОЙСТВО', ['Все', 'Edge-01', 'Edge-02', 'Edge-03'], state.device);
+  addSelect('filter-binding', 'ПРИВЯЗКА', ['Все', 'Линия №1', 'Зона A', 'ТС 742'], state.binding);
+
+  const addCheckboxGroup = (title, values, checkedValues, targetSet) => {
+    const fieldset = element('fieldset');
+    fieldset.append(element('legend', '', title));
+    values.forEach(value => {
+      const label = element('label', 'check-row');
+      const input = element('input');
+      input.type = 'checkbox';
+      input.checked = checkedValues.includes(value);
+      input.addEventListener('change', () => {
+        input.checked ? targetSet.add(value) : targetSet.delete(value);
+        renderFeedRows();
+      });
+      label.append(input, element('span', '', value));
+      fieldset.append(label);
+    });
+    aside.append(fieldset);
+  };
+
+  addCheckboxGroup('КОД СОБЫТИЯ', ['DEFECT', 'NO_HELMET', 'NORMAL'], [...state.visibleCodes], state.visibleCodes);
+  addCheckboxGroup('КРИТИЧНОСТЬ', ['Высокая', 'Средняя', 'Низкая'], [...state.visibleSeverities], state.visibleSeverities);
+
+  const actions = element('div', 'filter-actions');
+  actions.append(button(strings.reset, 'button', () => {
+    state.visibleCodes = new Set(['DEFECT', 'NO_HELMET', 'NORMAL']);
+    state.visibleSeverities = new Set(['Высокая', 'Средняя', 'Низкая']);
+    state.period = '30 дней';
+    state.device = 'Все';
+    state.binding = 'Все';
+    render();
+  }));
+  aside.append(actions);
+  return aside;
+}
+
+function getFilteredEvents() {
+  const now = new Date('2026-11-22T23:59:59');
+  const days = { 'Сегодня': 1, '7 дней': 7, '30 дней': 30 }[state.period];
+  const cutoff = days ? new Date(now.getTime() - (days - 1) * 86400000) : null;
+  return events.filter(event => {
+    const eventDate = new Date(`${event.date}T${event.time}`);
+    return state.visibleCodes.has(event.code)
+      && state.visibleSeverities.has(event.severity)
+      && (state.device === 'Все' || event.device === state.device)
+      && (state.binding === 'Все' || event.binding === state.binding)
+      && (!cutoff || eventDate >= cutoff);
+  }).sort((a, b) => {
+    const comparison = new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`);
+    return state.ascending ? comparison : -comparison;
+  });
+}
+
+function openModal(title) {
+  state.modal = title;
+  renderModal();
+}
+
+function renderModal() {
+  document.querySelector('.modal-backdrop')?.remove();
+  if (!state.modal) return;
+  const backdrop = element('div', 'modal-backdrop');
+  backdrop.addEventListener('mousedown', event => {
+    if (event.target === backdrop) {
+      state.modal = null;
+      renderModal();
+    }
+  });
+  const modal = element('section', 'modal');
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  const header = element('div', 'modal-header');
+  header.append(element('h2', '', state.modal));
+  header.append(button('×', '', () => {
+    state.modal = null;
+    renderModal();
+  }));
+  modal.append(header);
+  if (state.modal === 'Media события') {
+    modal.append(element('div', 'large-media', 'JPEG · превью события'));
+  } else {
+    const content = element('div', 'modal-content');
+    content.append(element('p', '', `Раздел «${state.modal}» будет доступен после подключения API.`));
+    content.append(button('Закрыть', 'button button-primary', () => {
+      state.modal = null;
+      renderModal();
+    }));
+    modal.append(content);
+  }
+  backdrop.append(modal);
+  app.append(backdrop);
+}
