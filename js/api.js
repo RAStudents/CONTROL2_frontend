@@ -1,78 +1,55 @@
 import { config } from './config.js';
 
-const API_BASE_URL = (config.apiUrl || 'http://localhost:8000').replace(/\/$/, '');
+const TOKEN_KEY = 'control_token';
 
-export async function apiRequest(path, options = {}) {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 15000);
-  const headers = new Headers(options.headers ?? {});
+export const api = {
+  setToken(token) {
+    localStorage.setItem(TOKEN_KEY, token);
+  },
 
-  if (options.body !== undefined && !(options.body instanceof FormData)) {
-    headers.set('Content-Type', 'application/json');
-  }
+  getToken() {
+    return localStorage.getItem(TOKEN_KEY);
+  },
 
-  const token = localStorage.getItem('control.jwt');
-  if (token) headers.set('Authorization', `Bearer ${token}`);
+  logout() {
+    localStorage.removeItem(TOKEN_KEY);
+  },
 
-  try {
-    const response = await fetch(`${API_BASE_URL}${path}`, {
-      ...options,
-      headers,
-      body: options.body === undefined || options.body instanceof FormData
-        ? options.body
-        : JSON.stringify(options.body),
-      signal: options.signal ?? controller.signal
-    });
+  async request(endpoint, options = {}) {
+    const url = `${config.apiUrl}${endpoint}`;
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(this.getToken() ? { 'Authorization': `Bearer ${this.getToken()}` } : {}),
+      ...options.headers,
+    };
 
-    const contentType = response.headers.get('content-type') ?? '';
-    const data = contentType.includes('application/json')
-      ? await response.json()
-      : await response.text();
+    const response = await fetch(url, { ...options, headers });
+
+    if (response.status === 401) {
+      this.logout();
+      window.location.reload();
+      throw new Error('Неавторизован');
+    }
 
     if (!response.ok) {
-      if (response.status === 401) {
-        localStorage.removeItem('control.jwt');
-      }
-
-      const detail = data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(item => item.msg).join('; ')
-          : data?.message ?? `Ошибка запроса (${response.status})`;
-
-      const error = new Error(message);
-      error.status = response.status;
-      error.data = data;
-      throw error;
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || 'Ошибка сервера');
     }
 
+    return response.json();
+  },
+
+  async login(email, password) {
+    const data = await this.request('/api/cabinet/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    this.setToken(data.access_token);
     return data;
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new Error('Время ожидания ответа сервера истекло.');
-    }
-    if (error instanceof TypeError) {
-      throw new Error('Не удалось связаться с сервером. Проверьте адрес API и его доступность.');
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeout);
-  }
-}
+  },
 
-export function login(email, password) {
-  return apiRequest('/api/cabinet/auth/login', {
-    method: 'POST',
-    body: { email, password }
-  });
-}
-
-export async function checkApiHealth() {
-  try {
-    const result = await apiRequest('/health');
-    return result?.status === 'ok';
-  } catch {
-    return false;
+  async getEvents() {
+    return this.request('/api/cabinet/feed');
+    return []; 
   }
-}
+};

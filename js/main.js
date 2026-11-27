@@ -1,80 +1,22 @@
 import { strings } from './i18n.js';
-import { login, checkApiHealth } from './api.js';
-import { config } from './config.js';
+import { api } from './api.js';
 
-const events = [
-  { date: '2026-11-22', time: '14:32:10', device: 'Edge-01', binding: 'Линия №1', code: 'DEFECT', severity: 'Высокая' },
-  { date: '2026-11-21', time: '14:30:02', device: 'Edge-02', binding: 'Зона A', code: 'NORMAL', severity: 'Низкая' },
-  { date: '2026-11-20', time: '14:28:44', device: 'Edge-01', binding: 'Линия №1', code: 'NO_HELMET', severity: 'Средняя' },
-  { date: '2026-11-18', time: '14:25:11', device: 'Edge-03', binding: 'ТС 742', code: 'NORMAL', severity: 'Низкая' },
-  { date: '2026-11-15', time: '14:21:09', device: 'Edge-02', binding: 'Зона A', code: 'DEFECT', severity: 'Высокая' },
-  { date: '2026-11-10', time: '14:18:33', device: 'Edge-01', binding: 'Линия №1', code: 'DEFECT', severity: 'Высокая' },
-  { date: '2026-10-29', time: '14:15:20', device: 'Edge-03', binding: 'ТС 742', code: 'NO_HELMET', severity: 'Средняя' }
+const roles = [
+  { id: 'supplier', label: strings.roleSupplier },
+  { id: 'company', label: strings.roleCompany },
+  { id: 'viewer', label: strings.roleViewer }
 ];
 
-const ROLE_LABELS = {
-  provider_admin: { id: 'supplier', label: strings.roleSupplier },
-  supplier_admin: { id: 'supplier', label: strings.roleSupplier },
-  company_admin: { id: 'company', label: strings.roleCompany },
-  observer: { id: 'viewer', label: strings.roleViewer },
-  viewer: { id: 'viewer', label: strings.roleViewer }
-};
-
-function decodeToken(token) {
-  try {
-    const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(decodeURIComponent(atob(payload).split('').map(char =>
-      `%${char.charCodeAt(0).toString(16).padStart(2, '0')}`
-    ).join('')));
-  } catch {
-    return null;
-  }
-}
-
-function getSession() {
-  const token = localStorage.getItem('control.jwt');
-  if (!token) return null;
-  const payload = decodeToken(token);
-  if (!payload || (payload.exp && payload.exp * 1000 <= Date.now())) {
-    localStorage.removeItem('control.jwt');
-    return null;
-  }
-  return { token, payload };
-}
-
-const session = getSession();
-
-const FILTER_OPTIONS = {
-  period: ['Сегодня', '7 дней', '30 дней', 'Все время'],
-  device: ['Все', 'Edge-01', 'Edge-02', 'Edge-03'],
-  binding: ['Все', 'Линия №1', 'Зона A', 'ТС 742'],
-  codes: ['DEFECT', 'NO_HELMET', 'NORMAL'],
-  severities: ['Высокая', 'Средняя', 'Низкая']
-};
-
-const DEFAULT_FILTERS = {
-  period: '30 дней',
-  device: 'Все',
-  binding: 'Все',
-  codes: new Set(FILTER_OPTIONS.codes),
-  severities: new Set(FILTER_OPTIONS.severities)
-};
-
 const state = {
-  loggedIn: Boolean(session),
-  session,
-  apiStatus: 'checking',
-  loginError: '',
-  selectedEvent: events[0],
-  filters: {
-    period: DEFAULT_FILTERS.period,
-    device: DEFAULT_FILTERS.device,
-    binding: DEFAULT_FILTERS.binding,
-    codes: new Set(DEFAULT_FILTERS.codes),
-    severities: new Set(DEFAULT_FILTERS.severities)
-  },
+  loggedIn: !!api.getToken(),
+  roleIndex: 0,
+  events: [],
+  selectedEvent: null,
+  visibleCodes: new Set(),
   ascending: false,
-  modal: null
+  modal: null,
+  error: null,
+  loading: false
 };
 
 const app = document.querySelector('#app');
@@ -93,124 +35,144 @@ function button(text, className = 'button', action) {
   return node;
 }
 
-function resetFilters() {
-  state.filters.period = DEFAULT_FILTERS.period;
-  state.filters.device = DEFAULT_FILTERS.device;
-  state.filters.binding = DEFAULT_FILTERS.binding;
-  state.filters.codes = new Set(DEFAULT_FILTERS.codes);
-  state.filters.severities = new Set(DEFAULT_FILTERS.severities);
-}
-
 function renderLogin() {
   const page = element('main', 'login-page');
   const form = element('form', 'login-card');
+  
   const heading = element('h1', '', strings.title);
   const subtitle = element('p', '', strings.login);
+  
   const emailLabel = element('label', '', strings.email);
   emailLabel.htmlFor = 'email';
   const email = element('input');
   email.id = 'email';
   email.type = 'email';
-  email.autocomplete = 'username';
-  email.required = true;
-  email.placeholder = 'name@company.ru';
+  email.value = 'admin@acmenra.ru';
+  
   const passwordLabel = element('label', '', strings.password);
   passwordLabel.htmlFor = 'password';
   const password = element('input');
   password.id = 'password';
   password.type = 'password';
-  password.autocomplete = 'current-password';
-  password.required = true;
-  const error = element('p', 'form-error', state.loginError);
-  error.setAttribute('role', 'alert');
-  error.hidden = !state.loginError;
-  const submit = button(strings.signIn, 'button button-primary login-button');
+  password.value = 'admin123';
+  
+  const submit = button(state.loading ? 'Вход...' : strings.signIn, 'button button-primary login-button');
   submit.type = 'submit';
-  const apiState = element('p', 'api-state', state.apiStatus === 'online'
-    ? 'Сервер доступен'
-    : state.apiStatus === 'offline' ? 'Сервер недоступен' : 'Проверка соединения…');
+  submit.disabled = state.loading;
 
-  form.append(heading, subtitle, emailLabel, email, passwordLabel, password, error, submit, apiState);
-  form.addEventListener('submit', async event => {
-    event.preventDefault();
-    state.loginError = '';
-    submit.disabled = true;
-    submit.textContent = 'Вход…';
-    error.hidden = true;
+  if (state.error) {
+    const errorMsg = element('p', 'error-message', state.error);
+    errorMsg.style.color = 'red';
+    errorMsg.style.fontSize = '12px';
+    errorMsg.style.marginBottom = '10px';
+    form.append(errorMsg);
+  }
+
+  form.append(heading, subtitle, emailLabel, email, passwordLabel, password, submit);
+  
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    state.error = null;
+    state.loading = true;
+    render();
 
     try {
-      const result = await login(email.value.trim(), password.value);
-      const payload = decodeToken(result.access_token);
-      if (!payload) throw new Error('Сервер вернул некорректный токен авторизации.');
-      localStorage.setItem('control.jwt', result.access_token);
-      state.session = { token: result.access_token, payload };
+      await api.login(email.value, password.value);
       state.loggedIn = true;
-      state.loginError = '';
+      await loadEvents();
+    } catch (err) {
+      state.error = err.message;
+    } finally {
+      state.loading = false;
       render();
-    } catch (requestError) {
-      state.loginError = requestError.message || 'Не удалось выполнить вход.';
-      error.textContent = state.loginError;
-      error.hidden = false;
-      submit.disabled = false;
-      submit.textContent = strings.signIn;
     }
   });
+
   page.append(form);
   app.replaceChildren(page);
 }
 
+async function loadEvents() {
+  try {
+    const data = await api.getEvents();
+    if (data && data.length > 0) {
+      state.events = data.map(e => ({
+        time: new Date(e.occurred_at).toLocaleTimeString('ru-RU'),
+        device: 'Edge-01', 
+        binding: 'Линия №1',
+        code: e.code.toUpperCase(),
+        severity: e.code === 'fall' ? 'Высокая' : 'Средняя', 
+        payload: e.payload
+      }));
+
+      const uniqueCodes = [...new Set(state.events.map(e => e.code))];
+      state.visibleCodes = new Set(uniqueCodes);
+      
+      if (!state.selectedEvent || !state.events.includes(state.selectedEvent)) {
+        state.selectedEvent = state.events[0];
+      }
+    } else {
+      state.events = [];
+      state.selectedEvent = null;
+    }
+  } catch (err) {
+    console.error('Ошибка загрузки:', err);
+    state.events = [];
+  }
+}
+
 function renderFilters() {
   const aside = element('aside', 'filters');
-
-  const addSelect = (id, labelText, options, value, key) => {
-    const label = element('label', '', labelText);
-    label.htmlFor = id;
+  
+  const addSelect = (labelText, options) => {
+    aside.append(element('label', '', labelText));
     const select = element('select');
-    select.id = id;
-    options.forEach(optionText => {
+    for (const optionText of options) {
       const option = element('option', '', optionText);
       option.value = optionText;
       select.append(option);
-    });
-    select.value = value;
-    select.addEventListener('change', () => {
-      state.filters[key] = select.value;
-      renderFeedRows();
-    });
-    aside.append(label, select);
+    }
+    aside.append(select);
   };
+  addSelect('ПЕРИОД', ['Сегодня', '7 дней', '30 дней']);
+  addSelect('УСТРОЙСТВО', ['Все', 'Edge-01']);
+  addSelect('ПРИВЯЗКА', ['Все', 'Линия №1']);
 
-  addSelect('filter-period', 'ПЕРИОД', FILTER_OPTIONS.period, state.filters.period, 'period');
-  addSelect('filter-device', 'УСТРОЙСТВО', FILTER_OPTIONS.device, state.filters.device, 'device');
-  addSelect('filter-binding', 'ПРИВЯЗКА', FILTER_OPTIONS.binding, state.filters.binding, 'binding');
-
-  const addCheckboxGroup = (title, values, targetSet) => {
-    const fieldset = element('fieldset');
-    fieldset.append(element('legend', '', title));
-    values.forEach(value => {
+  const fieldset = element('fieldset');
+  fieldset.append(element('legend', '', 'КОД СОБЫТИЯ'));
+  
+  const uniqueCodes = [...new Set(state.events.map(e => e.code))];
+  
+  if (uniqueCodes.length === 0) {
+    fieldset.append(element('p', '', 'Нет данных'));
+  } else {
+    uniqueCodes.forEach(code => {
       const label = element('label', 'check-row');
       const input = element('input');
       input.type = 'checkbox';
-      input.checked = targetSet.has(value);
+      input.checked = state.visibleCodes.has(code);
       input.addEventListener('change', () => {
-        input.checked ? targetSet.add(value) : targetSet.delete(value);
+        if (input.checked) {
+          state.visibleCodes.add(code);
+        } else {
+          state.visibleCodes.delete(code);
+        }
         renderFeedRows();
       });
-      label.append(input, element('span', '', value));
+      label.append(input, element('span', '', code));
       fieldset.append(label);
     });
-    aside.append(fieldset);
-  };
-
-  addCheckboxGroup('КОД СОБЫТИЯ', FILTER_OPTIONS.codes, state.filters.codes);
-  addCheckboxGroup('КРИТИЧНОСТЬ', FILTER_OPTIONS.severities, state.filters.severities);
+  }
+  aside.append(fieldset);
 
   const actions = element('div', 'filter-actions');
+  actions.append(button(strings.apply, 'button button-primary', () => renderFeedRows()));
   actions.append(button(strings.reset, 'button', () => {
-    resetFilters();
+    state.visibleCodes = new Set(uniqueCodes);
     render();
   }));
   aside.append(actions);
+  
   return aside;
 }
 
@@ -218,36 +180,40 @@ function severityBadge(value) {
   return element('span', `severity severity-${value.toLowerCase()}`, value);
 }
 
-function getFilteredEvents() {
-  const now = new Date();
-  now.setHours(23, 59, 59, 999);
-  const days = { 'Сегодня': 1, '7 дней': 7, '30 дней': 30 }[state.filters.period];
-  const cutoff = days ? new Date(now.getTime() - (days - 1) * 86400000) : null;
-  return events.filter(event => {
-    const eventDate = new Date(`${event.date}T${event.time}`);
-    return state.filters.codes.has(event.code)
-      && state.filters.severities.has(event.severity)
-      && (state.filters.device === 'Все' || event.device === state.filters.device)
-      && (state.filters.binding === 'Все' || event.binding === state.filters.binding)
-      && (!cutoff || eventDate >= cutoff);
-  }).sort((a, b) => {
-    const comparison = new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`);
-    return state.ascending ? comparison : -comparison;
-  });
-}
-
 function renderFeedRows() {
   const body = document.querySelector('#event-rows');
   if (!body) return;
-  const filtered = getFilteredEvents();
-  if (!filtered.some(event => event === state.selectedEvent)) state.selectedEvent = filtered[0] ?? null;
+  
+  let filtered = state.events.filter(event => state.visibleCodes.has(event.code));
+  if (state.ascending) filtered = [...filtered].reverse();
+  
   body.replaceChildren();
+  
+  if (filtered.length === 0) {
+    const row = element('tr');
+    const cell = element('td', '', 'Событий не найдено');
+    cell.colSpan = 5;
+    cell.style.textAlign = 'center';
+    cell.style.color = '#6b7a8c';
+    row.append(cell);
+    body.append(row);
+    
+    state.selectedEvent = null;
+    renderCard();
+    return;
+  }
+
+  if (!filtered.find(e => e.time === state.selectedEvent?.time)) {
+      state.selectedEvent = filtered[0];
+      renderCard();
+  }
+
   filtered.forEach(event => {
-    const row = element('tr', state.selectedEvent === event ? 'selected' : '');
+    const row = element('tr', state.selectedEvent?.time === event.time ? 'selected' : '');
     row.addEventListener('click', () => {
       state.selectedEvent = event;
-      document.querySelector('.event-card')?.replaceWith(renderEventCard(event));
       renderFeedRows();
+      renderCard();
     });
     [event.time, event.device, event.binding].forEach(value => row.append(element('td', '', value)));
     row.append(element('td', 'code', event.code));
@@ -256,52 +222,46 @@ function renderFeedRows() {
     row.append(severityCell);
     body.append(row);
   });
-  if (!filtered.length) {
-    const row = element('tr', 'no-results');
-    const cell = element('td', '', 'По выбранным фильтрам ничего не найдено');
-    cell.colSpan = 5;
-    row.append(cell);
-    body.append(row);
-  }
-  const count = document.querySelector('#result-count');
-  if (count) count.textContent = `Найдено: ${filtered.length}`;
-  const card = document.querySelector('.event-card');
-  if (card) card.replaceWith(renderEventCard(state.selectedEvent));
+}
+
+function renderCard() {
+    const cardContainer = document.querySelector('.workspace > aside:last-child');
+    if (cardContainer) {
+        const newCard = renderEventCard(state.selectedEvent);
+        cardContainer.replaceWith(newCard);
+    }
 }
 
 function renderEventCard(event) {
   if (!event) return element('aside', 'event-card empty-card', strings.noEvent);
+  
   const aside = element('aside', 'event-card');
   aside.append(element('h2', '', 'КАРТОЧКА СОБЫТИЯ'));
+  
   const details = [
-    ['Время возникновения', `${event.date.split('-').reverse().join('.')} ${event.time}`],
-    ['Время получения', `${event.date.split('-').reverse().join('.')} ${event.time}`],
+    ['Время возникновения', `${event.time}`],
+    ['Код', event.code],
+    ['Критичность', event.severity],
     ['Устройство', event.device],
-    ['Привязка', event.binding],
-    ['Код', `${event.code}${event.code === 'DEFECT' ? ' (Дефект)' : ''}`],
-    ['Уверенность', '96%']
+    ['Привязка', event.binding]
   ];
+  
   const list = element('dl');
   details.forEach(([term, value]) => {
     const row = element('div');
     row.append(element('dt', '', term), element('dd', '', value));
     list.append(row);
   });
-  const severityRow = element('div');
-  severityRow.append(element('dt', '', 'Критичность'));
-  const severityValue = element('dd');
-  severityValue.append(severityBadge(event.severity));
-  severityRow.append(severityValue);
-  list.append(severityRow);
+  
   aside.append(list, element('h2', '', 'PAYLOAD'));
-  const payload = element('pre', '', '{ "defect_type": "царапина",\n  "confidence": 0.96 }');
+  
+  const payloadText = JSON.stringify(event.payload || {}, null, 2);
+  const payload = element('pre', '', payloadText);
+  
   aside.append(payload, element('h2', 'media-heading', 'MEDIA'));
   aside.append(element('div', 'media-preview', 'JPEG · превью'));
   aside.append(button('Открыть media', 'button button-primary full', () => openModal('Media события')));
-  aside.append(button('Закрыть карточку', 'button full', () => {
-    state.selectedEvent = null;
-    render();
-  }));
+  
   return aside;
 }
 
@@ -310,79 +270,76 @@ function openModal(title) {
   renderModal();
 }
 
-function closeModal() {
-  state.modal = null;
-  renderModal();
-}
-
 function renderModal() {
   document.querySelector('.modal-backdrop')?.remove();
   if (!state.modal) return;
   const backdrop = element('div', 'modal-backdrop');
   backdrop.addEventListener('mousedown', event => {
-    if (event.target === backdrop) closeModal();
+    if (event.target === backdrop) {
+      state.modal = null;
+      renderModal();
+    }
   });
   const modal = element('section', 'modal');
   modal.setAttribute('role', 'dialog');
   modal.setAttribute('aria-modal', 'true');
   const header = element('div', 'modal-header');
   header.append(element('h2', '', state.modal));
-  header.append(button('×', '', closeModal));
+  header.append(button('×', '', () => {
+    state.modal = null;
+    renderModal();
+  }));
   modal.append(header);
-  if (state.modal === 'Media события') {
-    modal.append(element('div', 'large-media', 'JPEG · превью события'));
-  } else {
-    const content = element('div', 'modal-content');
-    content.append(element('p', '', `Раздел «${state.modal}» будет доступен после подключения API.`));
-    content.append(button('Закрыть', 'button button-primary', closeModal));
-    modal.append(content);
-  }
+  
+  const content = element('div', 'modal-content');
+  content.append(element('p', '', `Раздел «${state.modal}» в разработке.`));
+  content.append(button('Закрыть', 'button button-primary', () => {
+    state.modal = null;
+    renderModal();
+  }));
+  modal.append(content);
+
   backdrop.append(modal);
   app.append(backdrop);
 }
 
-function renderTopbar() {
-  const payload = state.session?.payload ?? {};
-  const role = ROLE_LABELS[payload.role] ?? { id: 'viewer', label: payload.role ?? 'Пользователь' };
+function renderDashboard() {
+  const role = roles[state.roleIndex];
+  const dashboard = element('main', 'dashboard');
   const topbar = element('header', 'topbar');
+  
   topbar.append(button('CONTROL', 'logo', () => {
-    state.selectedEvent = events[0];
+    state.selectedEvent = state.events[0] || null;
     render();
   }));
-  topbar.append(element('span', 'company-name', role.id === 'supplier'\n    ? 'Acmenra Studio (Поставщик)'\n    : 'Компания не загружена'));
-  topbar.append(element('span', `role role-${role.id}`, role.label));
+  
+  topbar.append(element('span', 'company-name', 'ООО «Завод»'));
+  topbar.append(button(role.label, `role role-${role.id}`, () => {
+    state.roleIndex = (state.roleIndex + 1) % roles.length;
+    render();
+  }));
+  
   topbar.append(element('div', 'topbar-spacer'));
-  topbar.append(element('span', 'user', 'Пользователь'));
-  const connection = button(state.apiStatus === 'online' ? '● API доступен' : '● API недоступен',
-    `connection ${state.apiStatus === 'online' ? 'online' : 'offline'}`,
-    async () => {
-      state.apiStatus = await checkApiHealth() ? 'online' : 'offline';
-      render();
-    });
-  topbar.append(connection);
+  topbar.append(element('span', 'user', 'Иван Петров'));
+  topbar.append(button('● Связь OK', 'connection', () => openModal('Связь')));
+  
   topbar.append(button('Выйти', 'button', () => {
-    localStorage.removeItem('control.jwt');
-    state.session = null;
+    api.logout();
     state.loggedIn = false;
-    state.loginError = '';
     render();
   }));
-  return topbar;
-}
 
-function renderFeed() {
+  const workspace = element('div', 'workspace');
+  workspace.append(renderFilters());
+  
   const feed = element('section', 'feed');
   const toolbar = element('div', 'feed-toolbar');
-  toolbar.append(button('Обновить', 'button', () => renderFeedRows()));
-  const resultCount = element('span', '', 'Найдено: 7');
-  resultCount.id = 'result-count';
-  toolbar.append(resultCount);
-  toolbar.append(button(`Сортировка: ${state.ascending ? '↑' : '↓'} по времени`, 'sort', () => {
-    state.ascending = !state.ascending;
-    renderFeedRows();
-    const sortButton = document.querySelector('.sort');
-    if (sortButton) sortButton.textContent = `Сортировка: ${state.ascending ? '↑' : '↓'} по времени`;
+  toolbar.append(button('Обновить', 'button', async () => {
+    await loadEvents();
+    render();
   }));
+  toolbar.append(element('span', '', `Найдено: ${state.events.length}`));
+  
   const tableWrap = element('div', 'table-wrap');
   const table = element('table');
   const head = element('thead');
@@ -393,55 +350,53 @@ function renderFeed() {
   body.id = 'event-rows';
   table.append(head, body);
   tableWrap.append(table);
+  
   const pagination = element('div', 'pagination');
-  pagination.append(element('span', '', 'Показаны все найденные события'));
+  pagination.append(button('← Назад'), element('span', '', 'Страница 1 из 1'), button('Вперёд →'));
   feed.append(toolbar, tableWrap, pagination);
-  return feed;
-}
+  
+  workspace.append(feed);
+  workspace.append(renderEventCard(state.selectedEvent));
 
-function renderFooter() {
   const footer = element('footer');
   const summary = element('div', 'status-summary');
   summary.append(
-    element('span', '', 'Устройств на связи: 12'),
-    element('span', '', 'Не на связи: 1'),
-    element('span', '', 'Событий за период: 1 248')
+    element('span', '', 'Устройств на связи: 12'), 
+    element('span', '', 'Не на связи: 1'), 
+    element('span', '', `Событий за период: ${state.events.length}`)
   );
+  
   const footerActions = element('div', 'footer-actions');
   footerActions.append(button('Отчёт', 'button', () => openModal('Отчёт')));
   footerActions.append(button('История', 'button', () => openModal('История')));
-  const role = ROLE_LABELS[state.session?.payload?.role] ?? { id: 'viewer' };
+  
   if (role.id !== 'viewer') {
     footerActions.append(button('Пользователи', 'button', () => openModal('Пользователи')));
     footerActions.append(button('Устройства', 'button', () => openModal('Устройства')));
   }
+  
   footer.append(summary, footerActions);
-  return footer;
-}
-
-function renderDashboard() {
-  const dashboard = element('main', 'dashboard');
-  const workspace = element('div', 'workspace');
-  workspace.append(renderFilters(), renderFeed(), renderEventCard(state.selectedEvent));
-  const demoNotice = element('div', 'demo-notice',
-    'События и показатели ниже демонстрационные: API для чтения событий пока не реализован.');
-  dashboard.append(renderTopbar(), demoNotice, workspace, renderFooter());
+  
+  dashboard.append(topbar, workspace, footer);
   app.replaceChildren(dashboard);
+  
   renderFeedRows();
   renderModal();
 }
 
 function render() {
-  if (state.loggedIn) renderDashboard();
-  else renderLogin();
+  if (state.loggedIn) {
+    renderDashboard();
+  } else {
+    renderLogin();
+  }
 }
 
 window.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && state.modal) closeModal();
+  if (event.key === 'Escape' && state.modal) {
+    state.modal = null;
+    renderModal();
+  }
 });
 
 render();
-checkApiHealth().then(online => {
-  state.apiStatus = online ? 'online' : 'offline';
-  if (!state.loggedIn) renderLogin();
-});
