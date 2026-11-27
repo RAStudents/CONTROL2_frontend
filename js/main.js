@@ -1,4 +1,6 @@
 import { strings } from './i18n.js';
+import { login, checkApiHealth } from './api.js';
+import { config } from './config.js';
 
 const events = [
   { date: '2026-11-22', time: '14:32:10', device: 'Edge-01', binding: 'Линия №1', code: 'DEFECT', severity: 'Высокая' },
@@ -10,11 +12,37 @@ const events = [
   { date: '2026-10-29', time: '14:15:20', device: 'Edge-03', binding: 'ТС 742', code: 'NO_HELMET', severity: 'Средняя' }
 ];
 
-const roles = [
-  { id: 'supplier', label: strings.roleSupplier },
-  { id: 'company', label: strings.roleCompany },
-  { id: 'viewer', label: strings.roleViewer }
-];
+const ROLE_LABELS = {
+  provider_admin: { id: 'supplier', label: strings.roleSupplier },
+  supplier_admin: { id: 'supplier', label: strings.roleSupplier },
+  company_admin: { id: 'company', label: strings.roleCompany },
+  observer: { id: 'viewer', label: strings.roleViewer },
+  viewer: { id: 'viewer', label: strings.roleViewer }
+};
+
+function decodeToken(token) {
+  try {
+    const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(decodeURIComponent(atob(payload).split('').map(char =>
+      `%${char.charCodeAt(0).toString(16).padStart(2, '0')}`
+    ).join('')));
+  } catch {
+    return null;
+  }
+}
+
+function getSession() {
+  const token = localStorage.getItem('control.jwt');
+  if (!token) return null;
+  const payload = decodeToken(token);
+  if (!payload || (payload.exp && payload.exp * 1000 <= Date.now())) {
+    localStorage.removeItem('control.jwt');
+    return null;
+  }
+  return { token, payload };
+}
+
+const session = getSession();
 
 const FILTER_OPTIONS = {
   period: ['Сегодня', '7 дней', '30 дней', 'Все время'],
@@ -33,8 +61,10 @@ const DEFAULT_FILTERS = {
 };
 
 const state = {
-  loggedIn: false,
-  roleIndex: 0,
+  loggedIn: Boolean(session),
+  session,
+  apiStatus: 'checking',
+  loginError: '',
   selectedEvent: events[0],
   filters: {
     period: DEFAULT_FILTERS.period,
@@ -82,23 +112,48 @@ function renderLogin() {
   email.id = 'email';
   email.type = 'email';
   email.autocomplete = 'username';
-  email.value = 'ivan.petrov@zavod.ru';
+  email.required = true;
+  email.placeholder = 'name@company.ru';
   const passwordLabel = element('label', '', strings.password);
   passwordLabel.htmlFor = 'password';
   const password = element('input');
   password.id = 'password';
   password.type = 'password';
   password.autocomplete = 'current-password';
-  password.value = 'password';
+  password.required = true;
+  const error = element('p', 'form-error', state.loginError);
+  error.setAttribute('role', 'alert');
+  error.hidden = !state.loginError;
   const submit = button(strings.signIn, 'button button-primary login-button');
   submit.type = 'submit';
-  const forgot = button(strings.forgotPassword, 'forgot', () => openModal(strings.forgotPassword));
+  const apiState = element('p', 'api-state', state.apiStatus === 'online'
+    ? 'Сервер доступен'
+    : state.apiStatus === 'offline' ? 'Сервер недоступен' : 'Проверка соединения…');
 
-  form.append(heading, subtitle, emailLabel, email, passwordLabel, password, submit, forgot);
-  form.addEventListener('submit', event => {
+  form.append(heading, subtitle, emailLabel, email, passwordLabel, password, error, submit, apiState);
+  form.addEventListener('submit', async event => {
     event.preventDefault();
-    state.loggedIn = true;
-    render();
+    state.loginError = '';
+    submit.disabled = true;
+    submit.textContent = 'Вход…';
+    error.hidden = true;
+
+    try {
+      const result = await login(email.value.trim(), password.value);
+      const payload = decodeToken(result.access_token);
+      if (!payload) throw new Error('Сервер вернул некорректный токен авторизации.');
+      localStorage.setItem('control.jwt', result.access_token);
+      state.session = { token: result.access_token, payload };
+      state.loggedIn = true;
+      state.loginError = '';
+      render();
+    } catch (requestError) {
+      state.loginError = requestError.message || 'Не удалось выполнить вход.';
+      error.textContent = state.loginError;
+      error.hidden = false;
+      submit.disabled = false;
+      submit.textContent = strings.signIn;
+    }
   });
   page.append(form);
   app.replaceChildren(page);
@@ -164,7 +219,8 @@ function severityBadge(value) {
 }
 
 function getFilteredEvents() {
-  const now = new Date('2026-11-22T23:59:59');
+  const now = new Date();
+  now.setHours(23, 59, 59, 999);
   const days = { 'Сегодня': 1, '7 дней': 7, '30 дней': 30 }[state.filters.period];
   const cutoff = days ? new Date(now.getTime() - (days - 1) * 86400000) : null;
   return events.filter(event => {
@@ -285,30 +341,30 @@ function renderModal() {
   app.append(backdrop);
 }
 
-function renderTopbar(role) {
+function renderTopbar() {
+  const payload = state.session?.payload ?? {};
+  const role = ROLE_LABELS[payload.role] ?? { id: 'viewer', label: payload.role ?? 'Пользователь' };
   const topbar = element('header', 'topbar');
   topbar.append(button('CONTROL', 'logo', () => {
     state.selectedEvent = events[0];
     render();
   }));
-  if (role.id === 'supplier') {
-    const company = element('select', 'company-switch');
-    ['ООО «Завод»', 'АО «Север»'].forEach(name => {
-      company.append(element('option', '', name));
-    });
-    topbar.append(company);
-  } else {
-    topbar.append(element('span', 'company-name', 'ООО «Завод»'));
-  }
-  topbar.append(button(role.label, `role role-${role.id}`, () => {
-    state.roleIndex = (state.roleIndex + 1) % roles.length;
-    render();
-  }));
+  topbar.append(element('span', 'company-name', role.id === 'supplier'\n    ? 'Acmenra Studio (Поставщик)'\n    : 'Компания не загружена'));
+  topbar.append(element('span', `role role-${role.id}`, role.label));
   topbar.append(element('div', 'topbar-spacer'));
-  topbar.append(element('span', 'user', 'Иван Петров'));
-  topbar.append(button('● Связь OK', 'connection', () => openModal('Связь')));
+  topbar.append(element('span', 'user', 'Пользователь'));
+  const connection = button(state.apiStatus === 'online' ? '● API доступен' : '● API недоступен',
+    `connection ${state.apiStatus === 'online' ? 'online' : 'offline'}`,
+    async () => {
+      state.apiStatus = await checkApiHealth() ? 'online' : 'offline';
+      render();
+    });
+  topbar.append(connection);
   topbar.append(button('Выйти', 'button', () => {
+    localStorage.removeItem('control.jwt');
+    state.session = null;
     state.loggedIn = false;
+    state.loginError = '';
     render();
   }));
   return topbar;
@@ -343,7 +399,7 @@ function renderFeed() {
   return feed;
 }
 
-function renderFooter(role) {
+function renderFooter() {
   const footer = element('footer');
   const summary = element('div', 'status-summary');
   summary.append(
@@ -354,6 +410,7 @@ function renderFooter(role) {
   const footerActions = element('div', 'footer-actions');
   footerActions.append(button('Отчёт', 'button', () => openModal('Отчёт')));
   footerActions.append(button('История', 'button', () => openModal('История')));
+  const role = ROLE_LABELS[state.session?.payload?.role] ?? { id: 'viewer' };
   if (role.id !== 'viewer') {
     footerActions.append(button('Пользователи', 'button', () => openModal('Пользователи')));
     footerActions.append(button('Устройства', 'button', () => openModal('Устройства')));
@@ -363,11 +420,12 @@ function renderFooter(role) {
 }
 
 function renderDashboard() {
-  const role = roles[state.roleIndex];
   const dashboard = element('main', 'dashboard');
   const workspace = element('div', 'workspace');
   workspace.append(renderFilters(), renderFeed(), renderEventCard(state.selectedEvent));
-  dashboard.append(renderTopbar(role), workspace, renderFooter(role));
+  const demoNotice = element('div', 'demo-notice',
+    'События и показатели ниже демонстрационные: API для чтения событий пока не реализован.');
+  dashboard.append(renderTopbar(), demoNotice, workspace, renderFooter());
   app.replaceChildren(dashboard);
   renderFeedRows();
   renderModal();
@@ -383,3 +441,7 @@ window.addEventListener('keydown', event => {
 });
 
 render();
+checkApiHealth().then(online => {
+  state.apiStatus = online ? 'online' : 'offline';
+  if (!state.loggedIn) renderLogin();
+});
